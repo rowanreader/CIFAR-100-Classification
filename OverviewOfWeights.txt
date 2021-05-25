@@ -1,0 +1,43 @@
+Hi!
+
+This is just a quick overview of the h5 files. These files contain the weights of the various networks I've trained, and running demo should go through all of them and show you what their training and test accuracies are (approximately). The data used in demo is much reduced because it takes too long to run through the full set.
+I'm going to briefly go over what each file is here.
+
+
+CNNs
+"scratchCNN.h5"
+- this is the CNN model I trained from scratch
+
+"preTrainedVGG16.h5"
+- this is the VGG16 with the ELU activation functions after.
+
+***Edit, no longer included due to size issues. Make sure you remove this option from the list of models in Demo.py
+"preTrainedVGG19.h5"
+- this is the VGG19. The layers I added on top of this one are the exact same as the layers I added on top of 
+
+
+ResNets
+"preTrainedResNet.h5" 
+- Basic ResNet50 with no affine augmentations or cutout. Alsu uses ReLu activation function
+
+
+"preTrainedResNet50ELU.h5"
+- The same as above but with ELU activation functions
+
+"preTrainedResNet50AllAugELU.h5"
+- This uses affine augmentations and ELU activations but no cutout.
+
+"preTrainedResNet50AllAugELU5.h5"
+- This is the same as the previous but with cutout (5x5 kernel)
+*note: I also had an 8x8 kernel one but I overwrote that file by accident.
+
+"preTrainedResNet101ELUV2.h5"
+- This is a ResNet101 instead of a ResNet50. It uses affine augmentation and ELU for the added layers, but no cutout
+
+
+***Edit, no longer included due to size issues. Make sure you remove this option from the list of models in Demo.py
+"preTrainedResNet152ELU.h5"
+- same as above but with a ResNet152 instead of a ResNet101
+
+
+Note: the zip file was too large, so I split these up into 2 zip files. You'll need to combine them to run Demo.py.

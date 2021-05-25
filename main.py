@@ -1,25 +1,18 @@
 import tensorflow
 from tensorflow.keras.datasets import cifar100
-from tensorflow.keras.utils import to_categorical
-from sklearn import preprocessing
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, Dropout
+from keras.utils import np_utils
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, Dropout, UpSampling2D, Input, Lambda, GlobalAveragePooling2D
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.losses import categorical_crossentropy
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
-import math
-import numpy as np
 import matplotlib.pyplot as plt
-# from https://github.com/mwv/zca
-from zca import ZCA
+from keras.applications.resnet import preprocess_input, ResNet50
 
-
-
-# make custom activation function
-from tensorflow.keras.layers import Activation
-from tensorflow.keras import backend as K
-from keras.utils.generic_utils import get_custom_objects
+from keras.layers.normalization import BatchNormalization
+import random
+from tensorflow.keras.applications.vgg16 import VGG16
 
 # loads and prepares data from cifar 100 dataset
 # prep = reshapes, normalizes
@@ -29,19 +22,20 @@ def loadAndPrep100():
     # both in uint8
     (xtrain, ytrain), (xtest, ytest) = cifar100.load_data()
 
-    # use one-hot encoding for y
-    ytrain = to_categorical(ytrain)
-    ytest = to_categorical(ytest)
+    # # use one-hot encoding for y
+    ytrain = np_utils.to_categorical(ytrain)
+    ytest = np_utils.to_categorical(ytest)
 
-    # covert x data from unsigned into to float, then normalize
-    xtrain = xtrain.astype('float32')/255
-    xtest = xtest.astype('float32')/255
-
+    # this is for the resnet only (since vgg was abandoned)
+    # changes pixel values to be within a certain range
+    xtrain = preprocess_input(xtrain)
+    xtest = preprocess_input(xtest)
 
     return xtrain, ytrain, xtest, ytest
 
+# CNN made from scratch
+# note: you may want to change to not-preprocessed. shouldn't hurt to classify as is tho.
 def CNN(xtrain, ytrain, xtest, ytest):
-
     # active = 'relu'
     active = 'elu'
     # make basic CNN
@@ -128,7 +122,152 @@ def CNN(xtrain, ytrain, xtest, ytest):
     print("Test accuracy: " + str(score[1]))
 
 
+# takes image, size of side of square to blackout and constant to set it to
+def cutout(img, s=5, c=0):
+    height, width, _ = img.shape
+    # select random location within image
+    # can be anywhere, even where cutout goes out of bounds (shown to be important)
+    x = random.randint(0,width)
+    y = random.randint(0, height)
+    # set parts on the image centered on x,y to c
+    # find 'start' = top and left
+    top = y - s//2
+    if top < 0:
+        top = 0
+    bottom = y + s//2
+    if bottom > height:
+        bottom = height-1
+    left = x - s//2
+    if left < 0:
+        left = 0
+
+    right = x + s//2
+    if right > width:
+        right = width-1
+
+    img[top:bottom, left:right, :] = c
+    return img
+
+
+# use pretrained resnet 50
+def resNet(xtrain, ytrain, xtest, ytest):
+    batch = 32
+    datagen = ImageDataGenerator(preprocessing_function=cutout, horizontal_flip=True,
+                             width_shift_range=0.3, height_shift_range=0.3, samplewise_center=True)
+    datagen.fit(xtrain)
+
+    # get the base pre-trained model, trained on imagenet
+    # don't include dense layers - want to modify
+    # this is the image size we need (imagenet = 224x224, double 32 3 times ->256)
+    resnet = ResNet50(weights='imagenet', include_top=False, input_shape=(256, 256, 3))
+
+    for layer in resnet.layers:
+        if isinstance(layer, BatchNormalization):
+            layer.trainable = True
+        else:
+            layer.trainable = False
+
+    model = Sequential()
+    # must upsample images to get them to appropriate size
+    model.add(UpSampling2D())
+    model.add(UpSampling2D())
+    model.add(UpSampling2D())
+    model.add(resnet)
+    model.add(GlobalAveragePooling2D())
+    model.add(Dense(256, activation='elu'))
+    # model.add(Dropout(0.2))
+    model.add(BatchNormalization())
+    model.add(Dense(100, activation='softmax'))
+
+
+    model.compile(loss='categorical_crossentropy',
+                  optimizer=Adam(),
+                  metrics=['accuracy']
+                  )
+    # for testing purposes
+    # num = 100
+    # xtest = xtest[0:num, :, :, :]
+    # ytest = ytest[0:num]
+    #
+    # xtrain = xtrain[0:num, :, :, :]
+    # ytrain = ytrain[0:num]
+    history = model.fit(datagen.flow(xtrain, ytrain, batch_size=batch),
+                        epochs=4,
+                        verbose=1,
+                        validation_data=(xtest, ytest)
+    )
+
+    score = model.evaluate(xtest, ytest, verbose=0)
+    print(score[1])
+    model.save('preTrainedResNet50AllAugELU5.h5')
+
+    # plot and save graphs of accuracy and loss
+    plt.plot(history.history['accuracy'])
+    plt.plot(history.history['val_accuracy'])
+    plt.title('Model Accuracy')
+    plt.ylabel('Accuracy')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.plot()
+    plt.savefig("Accuracy.png")
+
+    plt.clf()
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('Model Loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend(['Training', 'Validation'], loc='upper left')
+    plt.plot()
+    plt.savefig("Loss.png")
+
+# use pretrained CNN (VGG-16)
+# note: code currently has resnet preprocessing function, you will have to change that to use this
+# need to use vgg16 preprocess_input
+def pretrainedCNN(xtrain, ytrain, xtest, ytest):
+    batch = 32
+
+    datagen = ImageDataGenerator(preprocessing_function=cutout)
+    datagen.fit(xtrain)
+
+    cnn = VGG16(weights='imagenet', include_top=False, input_shape=(256, 256, 3))
+
+    # freeze layers
+
+    for layer in cnn.layers:
+        layer.trainable = False
+
+    model = Sequential()
+    # must upsample images to get them to appropriate size
+    model.add(UpSampling2D())
+    model.add(UpSampling2D())
+    model.add(UpSampling2D())
+    model.add(cnn)
+    model.add(GlobalAveragePooling2D())
+    model.add(BatchNormalization())
+    model.add(Dense(256, activation='relu'))
+    # model.add(Dropout(0.2))
+    model.add(BatchNormalization())
+    model.add(Dense(100, activation='softmax'))
+
+    model.compile(loss='categorical_crossentropy',
+                  optimizer=Adam(),
+                  metrics=['accuracy']
+                  )
+
+    model.fit(datagen.flow(xtrain, ytrain),
+                        batch_size=batch,
+                        epochs=5,
+                        verbose=1,
+                        validation_data=(xtest, ytest)
+                        )
+
+    score = model.evaluate(xtest, ytest, verbose=0)
+    print(score[1])
+    model.save('preTrainedCNNcutout.h5')
+
 if __name__ == '__main__':
     xtrain, ytrain, xtest, ytest = loadAndPrep100()
-
-    CNN(xtrain, ytrain, xtest, ytest)
+    resNet(xtrain, ytrain, xtest, ytest)
+    # CNN(xtrain, ytrain, xtest, ytest)
+    #pretrainedCNN(xtrain, ytrain, xtest, ytest)
